@@ -104,11 +104,15 @@ export class ProjectsService {
   private serialize(project: {
     apiKeyEncrypted: string;
     apiKeyHash: string;
+    credentials?: { encryptedPayload: string; [key: string]: unknown }[];
     [key: string]: unknown;
   }) {
     const rest: Record<string, unknown> = { ...project };
     delete rest.apiKeyEncrypted;
     delete rest.apiKeyHash;
+    if (project.credentials) {
+      rest.credentials = project.credentials.map(({ encryptedPayload: _encryptedPayload, ...credential }) => credential);
+    }
     return {
       ...rest,
       apiKey: this.encryptionService.decrypt(project.apiKeyEncrypted),

@@ -14,5 +14,5 @@ export const envValidationSchema = Joi.object({
   GOOGLE_ADS_CLIENT_SECRET: Joi.string().optional(),
   GOOGLE_ADS_REFRESH_TOKEN: Joi.string().optional(),
   GOOGLE_ADS_LOGIN_CUSTOMER_ID: Joi.string().optional(),
-  GOOGLE_ADS_API_VERSION: Joi.string().default('v18'),
+  GOOGLE_ADS_API_VERSION: Joi.string().default('v21'),
 });

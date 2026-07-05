@@ -4,19 +4,12 @@ import type { Event } from '../../../generated/prisma/client';
 import { EncryptionService } from '../../crypto/encryption.service';
 import { HashService } from '../../crypto/hash.service';
 import type { ForwarderResult } from './forwarder.interface';
+import { normalizeEmail, normalizePhone } from './pii-normalize';
 
 export interface MetaSendCredential {
   pixelId: string;
   accessToken: string;
   testEventCode?: string;
-}
-
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
-
-function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, '');
 }
 
 @Injectable()

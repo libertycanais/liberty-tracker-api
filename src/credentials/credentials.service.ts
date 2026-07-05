@@ -3,6 +3,7 @@ import { EncryptionService } from '../crypto/encryption.service';
 import { Platform } from '../../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { SetGa4CredentialDto } from './dto/set-ga4-credential.dto';
+import { SetGoogleAdsCredentialDto } from './dto/set-google-ads-credential.dto';
 import { SetMetaCredentialDto } from './dto/set-meta-credential.dto';
 
 export interface MetaCredentialPayload {
@@ -13,6 +14,11 @@ export interface MetaCredentialPayload {
 export interface Ga4CredentialPayload {
   measurementId: string;
   apiSecret: string;
+}
+
+export interface GoogleAdsCredentialPayload {
+  customerId: string;
+  conversionActionId: string;
 }
 
 @Injectable()
@@ -94,6 +100,37 @@ export class CredentialsService {
       },
     });
     return { platform: Platform.GA4, isActive: true };
+  }
+
+  async setGoogleAdsCredential(
+    workspaceId: string,
+    projectId: string,
+    dto: SetGoogleAdsCredentialDto,
+  ) {
+    await this.assertOwnership(workspaceId, projectId);
+    const payload: GoogleAdsCredentialPayload = {
+      customerId: dto.customerId,
+      conversionActionId: dto.conversionActionId,
+    };
+    await this.prisma.platformCredential.upsert({
+      where: {
+        projectId_platform: { projectId, platform: Platform.GOOGLE_ADS },
+      },
+      create: {
+        projectId,
+        platform: Platform.GOOGLE_ADS,
+        encryptedPayload: this.encryptionService.encrypt(
+          JSON.stringify(payload),
+        ),
+      },
+      update: {
+        encryptedPayload: this.encryptionService.encrypt(
+          JSON.stringify(payload),
+        ),
+        isActive: true,
+      },
+    });
+    return { platform: Platform.GOOGLE_ADS, isActive: true };
   }
 
   async getDecryptedPayload<T>(

@@ -111,7 +111,11 @@ export class ProjectsService {
     delete rest.apiKeyEncrypted;
     delete rest.apiKeyHash;
     if (project.credentials) {
-      rest.credentials = project.credentials.map(({ encryptedPayload: _encryptedPayload, ...credential }) => credential);
+      rest.credentials = project.credentials.map((credential) => {
+        const sanitized: Record<string, unknown> = { ...credential };
+        delete sanitized.encryptedPayload;
+        return sanitized;
+      });
     }
     return {
       ...rest,

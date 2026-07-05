@@ -9,4 +9,10 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().default(3001),
   CORS_ORIGIN: Joi.string().required(),
   META_API_VERSION: Joi.string().default('v21.0'),
+  GOOGLE_ADS_DEVELOPER_TOKEN: Joi.string().optional(),
+  GOOGLE_ADS_CLIENT_ID: Joi.string().optional(),
+  GOOGLE_ADS_CLIENT_SECRET: Joi.string().optional(),
+  GOOGLE_ADS_REFRESH_TOKEN: Joi.string().optional(),
+  GOOGLE_ADS_LOGIN_CUSTOMER_ID: Joi.string().optional(),
+  GOOGLE_ADS_API_VERSION: Joi.string().default('v18'),
 });

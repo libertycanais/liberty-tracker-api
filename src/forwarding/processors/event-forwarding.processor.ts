@@ -9,9 +9,14 @@ import {
   type Ga4SendCredential,
 } from '../platforms/ga4-mp.service';
 import {
+  GoogleAdsService,
+  type GoogleAdsSendCredential,
+} from '../platforms/google-ads.service';
+import {
   MetaCapiService,
   type MetaSendCredential,
 } from '../platforms/meta-capi.service';
+import type { ForwarderResult } from '../platforms/forwarder.interface';
 import type { ForwardJobData } from '../forwarding.service';
 
 @Processor('event-forwarding')
@@ -23,6 +28,7 @@ export class EventForwardingProcessor extends WorkerHost {
     private readonly encryptionService: EncryptionService,
     private readonly metaCapiService: MetaCapiService,
     private readonly ga4MpService: Ga4MpService,
+    private readonly googleAdsService: GoogleAdsService,
   ) {
     super();
   }
@@ -52,24 +58,35 @@ export class EventForwardingProcessor extends WorkerHost {
       this.encryptionService.decrypt(credentialRow.encryptedPayload),
     );
 
-    if (platform === Platform.GOOGLE_ADS) {
+    if (platform === Platform.GOOGLE_ADS && !event.gclid) {
       await this.prisma.eventForward.update({
         where: { eventId_platform: { eventId, platform } },
         data: {
           status: ForwardStatus.SKIPPED,
-          errorMessage: 'Google Ads forwarding not implemented yet',
+          errorMessage:
+            'Evento sem gclid; não é possível reportar conversão de clique',
         },
       });
       return;
     }
 
-    const result =
-      platform === Platform.META
-        ? await this.metaCapiService.send(event, {
-            ...(payload as MetaSendCredential),
-            testEventCode: credentialRow.metaTestEventCode ?? undefined,
-          })
-        : await this.ga4MpService.send(event, payload as Ga4SendCredential);
+    let result: ForwarderResult;
+    if (platform === Platform.META) {
+      result = await this.metaCapiService.send(event, {
+        ...(payload as MetaSendCredential),
+        testEventCode: credentialRow.metaTestEventCode ?? undefined,
+      });
+    } else if (platform === Platform.GA4) {
+      result = await this.ga4MpService.send(
+        event,
+        payload as Ga4SendCredential,
+      );
+    } else {
+      result = await this.googleAdsService.send(
+        event,
+        payload as GoogleAdsSendCredential,
+      );
+    }
 
     await this.prisma.eventForward.update({
       where: { eventId_platform: { eventId, platform } },

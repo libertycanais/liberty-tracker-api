@@ -1,0 +1,151 @@
+// Tracker Liberty — schema principal (multi-tenant)
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum Platform {
+  META
+  GA4
+  GOOGLE_ADS // reservado para a fase 2 (exige Developer Token do Google Ads)
+}
+
+enum EventType {
+  PAGE_VIEW
+  WHATSAPP_CLICK
+  LEAD
+  PURCHASE
+  SUBSCRIPTION
+  CUSTOM
+}
+
+enum ForwardStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+model Workspace {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  users     User[]
+  projects  Project[]
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  name         String?
+  role         WorkspaceRole @default(OWNER)
+  workspaceId  String
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([workspaceId])
+}
+
+model Project {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name             String
+  slug             String
+  apiKeyHash       String    @unique
+  apiKeyEncrypted  String
+  waPhoneNumber    String?
+  waDefaultMessage String?
+  domain           String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  credentials PlatformCredential[]
+  events      Event[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+}
+
+model PlatformCredential {
+  id                String    @id @default(cuid())
+  projectId         String
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform          Platform
+  encryptedPayload  String
+  metaTestEventCode String?
+  isActive          Boolean   @default(true)
+  lastVerifiedAt    DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([projectId, platform])
+}
+
+model Event {
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  visitorId      String
+  sessionId      String?
+  eventName      String
+  eventType      EventType
+  eventId        String
+  occurredAt     DateTime
+  sourceUrl      String?
+  referrerUrl    String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  fbclid         String?
+  gclid          String?
+  ip             String?
+  userAgent      String?
+  emailEncrypted String?
+  phoneEncrypted String?
+  externalId     String?
+  currency       String?
+  value          Decimal?  @db.Decimal(12, 2)
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+
+  forwards EventForward[]
+
+  @@unique([projectId, eventId])
+  @@index([projectId, occurredAt])
+  @@index([projectId, visitorId])
+}
+
+model EventForward {
+  id              String        @id @default(cuid())
+  eventId         String
+  event           Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  platform        Platform
+  status          ForwardStatus @default(PENDING)
+  attempt         Int           @default(0)
+  requestPayload  Json?
+  responsePayload Json?
+  httpStatus      Int?
+  errorMessage    String?
+  sentAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([eventId, platform])
+}

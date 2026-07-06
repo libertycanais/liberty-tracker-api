@@ -29,6 +29,7 @@ enum EventType {
   PURCHASE
   SUBSCRIPTION
   CUSTOM
+  HEARTBEAT
 }
 
 enum ForwardStatus {
@@ -73,6 +74,7 @@ model Project {
   waPhoneNumber    String?
   waDefaultMessage String?
   domain           String?
+  trackerConfig    Json?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -125,6 +127,9 @@ model Event {
   currency       String?
   value          Decimal?  @db.Decimal(12, 2)
   metadata       Json?
+  isNewVisitor     Boolean?
+  isNewSession     Boolean?
+  sessionStartedAt DateTime?
   createdAt      DateTime  @default(now())
 
   forwards EventForward[]

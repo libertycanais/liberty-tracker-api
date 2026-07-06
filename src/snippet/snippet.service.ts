@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EncryptionService } from '../crypto/encryption.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveTrackerConfig } from '../tracker/entities/tracker-config.entity';
+import type { TrackerConfig } from '../tracker/tracker.types';
 
 @Injectable()
 export class SnippetService {
@@ -17,7 +19,15 @@ export class SnippetService {
       throw new NotFoundException('Unknown project');
     }
     const apiKey = this.encryptionService.decrypt(project.apiKeyEncrypted);
-    return buildSnippet({ apiUrl, projectId, apiKey });
+    const config = resolveTrackerConfig(
+      project.trackerConfig as TrackerConfig | null,
+    );
+    return buildSnippet({
+      apiUrl,
+      projectId,
+      apiKey,
+      heartbeatIntervalSeconds: config.heartbeatIntervalSeconds,
+    });
   }
 }
 
@@ -25,12 +35,15 @@ function buildSnippet(opts: {
   apiUrl: string;
   projectId: string;
   apiKey: string;
+  heartbeatIntervalSeconds: number;
 }): string {
   return `(function () {
   var API_URL = ${JSON.stringify(opts.apiUrl)};
   var PROJECT_ID = ${JSON.stringify(opts.projectId)};
   var API_KEY = ${JSON.stringify(opts.apiKey)};
+  var HEARTBEAT_INTERVAL_MS = ${JSON.stringify(opts.heartbeatIntervalSeconds * 1000)};
   var VID_KEY = '_lt_vid';
+  var SID_KEY = '_lt_sid';
   var UTM_KEY = '_lt_utm';
 
   function uuid() {
@@ -45,6 +58,10 @@ function buildSnippet(opts: {
   function setCookie(name, value, days) {
     var expires = new Date(Date.now() + days * 864e5).toUTCString();
     document.cookie = name + '=' + encodeURIComponent(value) + '; expires=' + expires + '; path=/; SameSite=Lax';
+  }
+
+  function setSessionCookie(name, value) {
+    document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; SameSite=Lax';
   }
 
   function getCookie(name) {
@@ -65,6 +82,22 @@ function buildSnippet(opts: {
       window.localStorage.setItem(VID_KEY, stored);
     } catch (e) {}
     setCookie(VID_KEY, stored, 365);
+    return stored;
+  }
+
+  function getSessionId() {
+    var stored = null;
+    try {
+      stored = window.sessionStorage.getItem(SID_KEY);
+    } catch (e) {}
+    if (!stored) stored = getCookie(SID_KEY);
+    if (!stored) {
+      stored = uuid();
+    }
+    try {
+      window.sessionStorage.setItem(SID_KEY, stored);
+    } catch (e) {}
+    setSessionCookie(SID_KEY, stored);
     return stored;
   }
 
@@ -100,7 +133,28 @@ function buildSnippet(opts: {
   }
 
   var visitorId = getVisitorId();
+  var sessionId = getSessionId();
   var utms = getUtms();
+
+  function syncFromResponse(data) {
+    if (!data) return;
+    if (data.sessionId && data.sessionId !== sessionId) {
+      sessionId = data.sessionId;
+      try {
+        window.sessionStorage.setItem(SID_KEY, sessionId);
+      } catch (e) {}
+      setSessionCookie(SID_KEY, sessionId);
+      if (window.libertyTracker) window.libertyTracker.sessionId = sessionId;
+    }
+    if (data.visitorId && data.visitorId !== visitorId) {
+      visitorId = data.visitorId;
+      try {
+        window.localStorage.setItem(VID_KEY, visitorId);
+      } catch (e) {}
+      setCookie(VID_KEY, visitorId, 365);
+      if (window.libertyTracker) window.libertyTracker.visitorId = visitorId;
+    }
+  }
 
   function send(body) {
     var payload = JSON.stringify(body);
@@ -110,13 +164,19 @@ function buildSnippet(opts: {
         keepalive: true,
         headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
         body: payload,
-      });
+      })
+        .then(function (res) {
+          return res.json();
+        })
+        .then(syncFromResponse)
+        .catch(function () {});
     } catch (e) {}
   }
 
   function track(eventName, eventType, data) {
     var body = {
       visitorId: visitorId,
+      sessionId: sessionId,
       eventName: eventName,
       eventType: eventType,
       sourceUrl: window.location.href,
@@ -135,6 +195,15 @@ function buildSnippet(opts: {
     send(body);
   }
 
+  function heartbeat() {
+    send({
+      visitorId: visitorId,
+      sessionId: sessionId,
+      eventName: 'Heartbeat',
+      eventType: 'HEARTBEAT',
+    });
+  }
+
   function buildWaLink(campaignSlug) {
     var params = new URLSearchParams();
     params.set('vid', visitorId);
@@ -145,9 +214,18 @@ function buildSnippet(opts: {
     return API_URL + '/r/wa/' + PROJECT_ID + '/' + encodeURIComponent(campaignSlug) + '?' + params.toString();
   }
 
-  window.libertyTracker = { track: track, buildWaLink: buildWaLink, visitorId: visitorId };
+  window.libertyTracker = {
+    track: track,
+    buildWaLink: buildWaLink,
+    visitorId: visitorId,
+    sessionId: sessionId,
+  };
 
   track('PageView', 'PAGE_VIEW');
+
+  if (HEARTBEAT_INTERVAL_MS > 0) {
+    setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
+  }
 })();
 `;
 }

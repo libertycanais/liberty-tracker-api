@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
@@ -10,6 +9,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/jwt-payload.type';
@@ -17,6 +23,7 @@ import { CurrentProject } from '../common/decorators/current-project.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ProjectApiKeyGuard } from '../common/guards/project-api-key.guard';
+import { TrackerService } from '../tracker/tracker.service';
 import type { Project } from '../../generated/prisma/client';
 import type {
   EventType,
@@ -26,19 +33,24 @@ import type {
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventsService } from './events.service';
 
-function hostnameOf(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value).hostname;
-  } catch {
-    return null;
-  }
-}
-
+@ApiTags('events')
 @Controller()
 export class EventsController {
-  constructor(private readonly eventsService: EventsService) {}
+  constructor(
+    private readonly eventsService: EventsService,
+    private readonly trackerService: TrackerService,
+  ) {}
 
+  @ApiSecurity('apiKey')
+  @ApiOperation({
+    summary: 'Ingestão de eventos (endpoint único do pipeline de tracking)',
+    description:
+      'Passa por Domain Validation, allow/block list, Visitor/Session Manager e Attribution Engine antes de gravar o Event e enfileirar o forwarding. Eventos HEARTBEAT só renovam a sessão e nunca geram uma linha em Event.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Evento aceito, ignorado (blocked) ou heartbeat processado',
+  })
   @UseGuards(ProjectApiKeyGuard, ThrottlerGuard)
   @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Post('events')
@@ -47,13 +59,7 @@ export class EventsController {
     @Body() dto: CreateEventDto,
     @Req() req: Request,
   ) {
-    if (project.domain) {
-      const originHost =
-        hostnameOf(req.headers.origin) ?? hostnameOf(req.headers.referer);
-      if (originHost && originHost !== project.domain) {
-        throw new ForbiddenException('Origin does not match project domain');
-      }
-    }
+    await this.trackerService.assertDomainAllowed(project, req);
 
     const ip =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
@@ -64,6 +70,10 @@ export class EventsController {
     });
   }
 
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Lista eventos de um projeto, com filtros e paginação',
+  })
   @UseGuards(JwtAuthGuard)
   @Get('projects/:projectId/events')
   findForProject(

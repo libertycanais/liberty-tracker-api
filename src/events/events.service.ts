@@ -9,6 +9,7 @@ import {
 } from '../../generated/prisma/enums';
 import { ForwardingService } from '../forwarding/forwarding.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackerService } from '../tracker/tracker.service';
 import { CreateEventDto } from './dto/create-event.dto';
 
 export interface FindEventsFilters {
@@ -28,9 +29,25 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly encryptionService: EncryptionService,
     private readonly forwardingService: ForwardingService,
+    private readonly trackerService: TrackerService,
   ) {}
 
   async createEvent(project: Project, dto: CreateEventDto, meta: RequestMeta) {
+    const decision = await this.trackerService.processIngestion(project, dto);
+
+    if (decision.kind === 'blocked') {
+      return { status: 'ignored', reason: decision.reason };
+    }
+
+    if (decision.kind === 'heartbeat') {
+      return {
+        status: 'ok',
+        visitorId: dto.visitorId,
+        sessionId: decision.sessionId,
+        isNewSession: decision.isNewSession,
+      };
+    }
+
     const eventId = dto.eventId ?? randomUUID();
     const occurredAt = dto.occurredAt ? new Date(dto.occurredAt) : new Date();
 
@@ -39,20 +56,20 @@ export class EventsService {
       create: {
         projectId: project.id,
         visitorId: dto.visitorId,
-        sessionId: dto.sessionId,
+        sessionId: decision.sessionId,
         eventName: dto.eventName,
         eventType: dto.eventType,
         eventId,
         occurredAt,
         sourceUrl: dto.sourceUrl,
         referrerUrl: dto.referrerUrl,
-        utmSource: dto.utmSource,
-        utmMedium: dto.utmMedium,
-        utmCampaign: dto.utmCampaign,
-        utmTerm: dto.utmTerm,
-        utmContent: dto.utmContent,
-        fbclid: dto.fbclid,
-        gclid: dto.gclid,
+        utmSource: decision.attribution.utmSource,
+        utmMedium: decision.attribution.utmMedium,
+        utmCampaign: decision.attribution.utmCampaign,
+        utmTerm: decision.attribution.utmTerm,
+        utmContent: decision.attribution.utmContent,
+        fbclid: decision.attribution.fbclid,
+        gclid: decision.attribution.gclid,
         ip: meta.ip,
         userAgent: meta.userAgent,
         emailEncrypted: dto.email
@@ -65,13 +82,24 @@ export class EventsService {
         currency: dto.currency,
         value: dto.value,
         metadata: dto.metadata as never,
+        isNewVisitor: decision.isNewVisitor,
+        isNewSession: decision.isNewSession,
+        sessionStartedAt: decision.sessionStartedAt,
       },
       update: {},
     });
 
     await this.forwardingService.enqueueForwards(event, project);
 
-    return { id: event.id, eventId: event.eventId, status: 'accepted' };
+    return {
+      id: event.id,
+      eventId: event.eventId,
+      status: 'accepted',
+      visitorId: event.visitorId,
+      sessionId: event.sessionId,
+      isNewVisitor: decision.isNewVisitor,
+      isNewSession: decision.isNewSession,
+    };
   }
 
   async findForProject(

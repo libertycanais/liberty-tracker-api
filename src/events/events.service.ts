@@ -1,10 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { EncryptionService } from '../crypto/encryption.service';
-import type { Project } from '../../generated/prisma/client';
+import type { Prisma, Project } from '../../generated/prisma/client';
+import {
+  EventType,
+  ForwardStatus,
+  Platform,
+} from '../../generated/prisma/enums';
 import { ForwardingService } from '../forwarding/forwarding.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
+
+export interface FindEventsFilters {
+  eventType?: EventType;
+  platform?: Platform;
+  forwardStatus?: ForwardStatus;
+}
 
 interface RequestMeta {
   ip?: string;
@@ -68,6 +79,7 @@ export class EventsService {
     projectId: string,
     page: number,
     pageSize: number,
+    filters: FindEventsFilters = {},
   ) {
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, workspaceId },
@@ -76,15 +88,28 @@ export class EventsService {
       throw new NotFoundException('Project not found');
     }
 
+    const where: Prisma.EventWhereInput = { projectId };
+    if (filters.eventType) {
+      where.eventType = filters.eventType;
+    }
+    if (filters.platform) {
+      where.forwards = {
+        some: {
+          platform: filters.platform,
+          ...(filters.forwardStatus ? { status: filters.forwardStatus } : {}),
+        },
+      };
+    }
+
     const [events, total] = await Promise.all([
       this.prisma.event.findMany({
-        where: { projectId },
+        where,
         orderBy: { occurredAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: { forwards: true },
       }),
-      this.prisma.event.count({ where: { projectId } }),
+      this.prisma.event.count({ where }),
     ]);
 
     return {

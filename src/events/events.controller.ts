@@ -18,6 +18,11 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ProjectApiKeyGuard } from '../common/guards/project-api-key.guard';
 import type { Project } from '../../generated/prisma/client';
+import type {
+  EventType,
+  ForwardStatus,
+  Platform,
+} from '../../generated/prisma/enums';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventsService } from './events.service';
 
@@ -66,12 +71,16 @@ export class EventsController {
     @Param('projectId') projectId: string,
     @Query('page', new ParseIntPipe({ optional: true })) page?: number,
     @Query('pageSize', new ParseIntPipe({ optional: true })) pageSize?: number,
+    @Query('eventType') eventType?: EventType,
+    @Query('platform') platform?: Platform,
+    @Query('forwardStatus') forwardStatus?: ForwardStatus,
   ) {
     return this.eventsService.findForProject(
       user.workspaceId,
       projectId,
       page ?? 1,
       pageSize ?? 25,
+      { eventType, platform, forwardStatus },
     );
   }
 }

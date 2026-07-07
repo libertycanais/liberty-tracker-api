@@ -61,7 +61,7 @@ export class GoogleAdsService {
 
     const apiVersion = this.configService.get<string>(
       'GOOGLE_ADS_API_VERSION',
-      'v18',
+      'v21',
     );
     const url = `https://googleads.googleapis.com/${apiVersion}/customers/${credential.customerId}:uploadClickConversions`;
 

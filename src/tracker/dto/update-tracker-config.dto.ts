@@ -63,4 +63,17 @@ export class UpdateTrackerConfigDto {
   @ArrayMaxSize(20)
   @IsString({ each: true })
   allowedDomains?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Limite de requisições por minuto para este projeto (POST /events)',
+    default: 120,
+    minimum: 1,
+    maximum: 100000,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  rateLimitPerMinute?: number;
 }

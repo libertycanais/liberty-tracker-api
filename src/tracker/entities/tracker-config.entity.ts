@@ -1,11 +1,13 @@
 import {
   DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+  DEFAULT_RATE_LIMIT_PER_MINUTE,
   DEFAULT_SESSION_TIMEOUT_MINUTES,
 } from '../tracker.constants';
 import type { ResolvedTrackerConfig, TrackerConfig } from '../tracker.types';
 
 export function resolveTrackerConfig(
   raw: TrackerConfig | null | undefined,
+  defaultRateLimitPerMinute: number = DEFAULT_RATE_LIMIT_PER_MINUTE,
 ): ResolvedTrackerConfig {
   return {
     sessionTimeoutMinutes:
@@ -15,6 +17,7 @@ export function resolveTrackerConfig(
     allowedEvents: raw?.allowedEvents ?? [],
     blockedEvents: raw?.blockedEvents ?? [],
     allowedDomains: raw?.allowedDomains ?? [],
+    rateLimitPerMinute: raw?.rateLimitPerMinute ?? defaultRateLimitPerMinute,
   };
 }
 

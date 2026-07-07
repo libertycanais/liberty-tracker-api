@@ -1,6 +1,9 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Project } from '../../generated/prisma/client';
+import { ConfigurationService } from '../config/configuration.service';
+import { DomainEventsService } from '../domain-events/domain-events.service';
+import { MetricsService } from '../observability/metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttributionEngineService } from './attribution-engine.service';
 import { SessionManagerService } from './session-manager.service';
@@ -32,6 +35,7 @@ describe('TrackerService', () => {
   let sessionManager: jest.Mocked<SessionManagerService>;
   let attributionEngine: jest.Mocked<AttributionEngineService>;
   let prisma: jest.Mocked<PrismaService>;
+  let metricsService: jest.Mocked<MetricsService>;
   let service: TrackerService;
 
   beforeEach(() => {
@@ -60,6 +64,19 @@ describe('TrackerService', () => {
     prisma = {
       project: { findFirst: jest.fn() },
     } as unknown as jest.Mocked<PrismaService>;
+    metricsService = {
+      incrementEventsBlocked: jest.fn(),
+      incrementVisitorsNew: jest.fn(),
+      incrementVisitorsReturning: jest.fn(),
+      incrementSessionsCreated: jest.fn(),
+      incrementHeartbeats: jest.fn(),
+    } as unknown as jest.Mocked<MetricsService>;
+    const configurationService = {
+      rateLimit: { defaultProjectLimitPerMinute: 120 },
+    } as unknown as jest.Mocked<ConfigurationService>;
+    const domainEvents = {
+      publish: jest.fn(),
+    } as unknown as jest.Mocked<DomainEventsService>;
 
     service = new TrackerService(
       prisma,
@@ -67,6 +84,9 @@ describe('TrackerService', () => {
       visitorManager,
       sessionManager,
       attributionEngine,
+      metricsService,
+      configurationService,
+      domainEvents,
     );
   });
 

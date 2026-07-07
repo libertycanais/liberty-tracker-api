@@ -1,8 +1,8 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Redis } from 'ioredis';
+import { Injectable, Logger } from '@nestjs/common';
+import type { Redis } from 'ioredis';
 import type { Project } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import {
   ATTRIBUTION_TTL_SECONDS,
   TRACKER_REDIS_KEY_PREFIX,
@@ -11,20 +11,36 @@ import {
 import type { TrackerConfig } from './tracker.types';
 
 @Injectable()
-export class TrackerRepository implements OnModuleDestroy {
+export class TrackerRepository {
+  private readonly logger = new Logger(TrackerRepository.name);
   private readonly redis: Redis;
 
   constructor(
-    configService: ConfigService,
+    redisService: RedisService,
     private readonly prisma: PrismaService,
   ) {
-    this.redis = new Redis(configService.getOrThrow<string>('REDIS_URL'), {
-      lazyConnect: false,
-    });
+    this.redis = redisService.getClient();
   }
 
-  onModuleDestroy() {
-    this.redis.disconnect();
+  /**
+   * Redis is enrichment infrastructure, not a source of truth — if it's
+   * unavailable, ingestion should degrade (treated as a cache miss) rather
+   * than fail the whole request. Every public Redis-backed method below
+   * routes through this so a Redis outage never surfaces as a 500.
+   */
+  private async safeRedis<T>(
+    operation: string,
+    fn: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      this.logger.error(
+        `Redis operation "${operation}" failed, falling back: ${(error as Error).message}`,
+      );
+      return fallback;
+    }
   }
 
   private visitorKey(projectId: string, visitorId: string): string {
@@ -43,10 +59,16 @@ export class TrackerRepository implements OnModuleDestroy {
     projectId: string,
     visitorId: string,
   ): Promise<Record<string, string> | null> {
-    const data = await this.redis.hgetall(
-      this.visitorKey(projectId, visitorId),
+    return this.safeRedis(
+      'getVisitorHash',
+      async () => {
+        const data = await this.redis.hgetall(
+          this.visitorKey(projectId, visitorId),
+        );
+        return Object.keys(data).length > 0 ? data : null;
+      },
+      null,
     );
-    return Object.keys(data).length > 0 ? data : null;
   }
 
   async setVisitorHash(
@@ -54,19 +76,31 @@ export class TrackerRepository implements OnModuleDestroy {
     visitorId: string,
     fields: Record<string, string | number>,
   ): Promise<void> {
-    const key = this.visitorKey(projectId, visitorId);
-    await this.redis.hset(key, fields);
-    await this.redis.expire(key, VISITOR_TTL_SECONDS);
+    return this.safeRedis(
+      'setVisitorHash',
+      async () => {
+        const key = this.visitorKey(projectId, visitorId);
+        await this.redis.hset(key, fields);
+        await this.redis.expire(key, VISITOR_TTL_SECONDS);
+      },
+      undefined,
+    );
   }
 
   async getSessionHash(
     projectId: string,
     sessionId: string,
   ): Promise<Record<string, string> | null> {
-    const data = await this.redis.hgetall(
-      this.sessionKey(projectId, sessionId),
+    return this.safeRedis(
+      'getSessionHash',
+      async () => {
+        const data = await this.redis.hgetall(
+          this.sessionKey(projectId, sessionId),
+        );
+        return Object.keys(data).length > 0 ? data : null;
+      },
+      null,
     );
-    return Object.keys(data).length > 0 ? data : null;
   }
 
   async setSessionHash(
@@ -75,9 +109,15 @@ export class TrackerRepository implements OnModuleDestroy {
     fields: Record<string, string>,
     ttlSeconds: number,
   ): Promise<void> {
-    const key = this.sessionKey(projectId, sessionId);
-    await this.redis.hset(key, fields);
-    await this.redis.expire(key, ttlSeconds);
+    return this.safeRedis(
+      'setSessionHash',
+      async () => {
+        const key = this.sessionKey(projectId, sessionId);
+        await this.redis.hset(key, fields);
+        await this.redis.expire(key, ttlSeconds);
+      },
+      undefined,
+    );
   }
 
   async touchSessionTtl(
@@ -85,17 +125,32 @@ export class TrackerRepository implements OnModuleDestroy {
     sessionId: string,
     ttlSeconds: number,
   ): Promise<void> {
-    await this.redis.expire(this.sessionKey(projectId, sessionId), ttlSeconds);
+    return this.safeRedis(
+      'touchSessionTtl',
+      async () => {
+        await this.redis.expire(
+          this.sessionKey(projectId, sessionId),
+          ttlSeconds,
+        );
+      },
+      undefined,
+    );
   }
 
   async getAttribution(
     projectId: string,
     visitorId: string,
   ): Promise<Record<string, string> | null> {
-    const data = await this.redis.hgetall(
-      this.attributionKey(projectId, visitorId),
+    return this.safeRedis(
+      'getAttribution',
+      async () => {
+        const data = await this.redis.hgetall(
+          this.attributionKey(projectId, visitorId),
+        );
+        return Object.keys(data).length > 0 ? data : null;
+      },
+      null,
     );
-    return Object.keys(data).length > 0 ? data : null;
   }
 
   async setAttribution(
@@ -103,12 +158,18 @@ export class TrackerRepository implements OnModuleDestroy {
     visitorId: string,
     fields: Record<string, string>,
   ): Promise<void> {
-    const key = this.attributionKey(projectId, visitorId);
-    await this.redis.del(key);
-    if (Object.keys(fields).length > 0) {
-      await this.redis.hset(key, fields);
-    }
-    await this.redis.expire(key, ATTRIBUTION_TTL_SECONDS);
+    return this.safeRedis(
+      'setAttribution',
+      async () => {
+        const key = this.attributionKey(projectId, visitorId);
+        await this.redis.del(key);
+        if (Object.keys(fields).length > 0) {
+          await this.redis.hset(key, fields);
+        }
+        await this.redis.expire(key, ATTRIBUTION_TTL_SECONDS);
+      },
+      undefined,
+    );
   }
 
   async getTrackerConfig(projectId: string): Promise<TrackerConfig | null> {

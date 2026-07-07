@@ -10,6 +10,7 @@ export interface TrackerConfig {
   allowedEvents?: string[];
   blockedEvents?: string[];
   allowedDomains?: string[];
+  rateLimitPerMinute?: number;
 }
 
 export interface ResolvedTrackerConfig {
@@ -18,6 +19,7 @@ export interface ResolvedTrackerConfig {
   allowedEvents: string[];
   blockedEvents: string[];
   allowedDomains: string[];
+  rateLimitPerMinute: number;
 }
 
 export interface VisitorState {

@@ -1,19 +1,25 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { ConfigurationModule } from './config/config.module';
 import { envValidationSchema } from './config/env.validation';
 import { CredentialsModule } from './credentials/credentials.module';
 import { CryptoModule } from './crypto/crypto.module';
+import { DomainEventsModule } from './domain-events/domain-events.module';
 import { EventsModule } from './events/events.module';
+import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
 import { ForwardingModule } from './forwarding/forwarding.module';
+import { RequestIdMiddleware } from './observability/logging/request-id.middleware';
+import { ObservabilityModule } from './observability/observability.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { RedirectModule } from './redirect/redirect.module';
+import { RedisModule } from './redis/redis.module';
 import { SnippetModule } from './snippet/snippet.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 
@@ -31,8 +37,12 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
         connection: { url: configService.getOrThrow<string>('REDIS_URL') },
       }),
     }),
+    ConfigurationModule,
     PrismaModule,
+    RedisModule,
     CryptoModule,
+    DomainEventsModule,
+    FeatureFlagsModule,
     AuthModule,
     WorkspacesModule,
     ProjectsModule,
@@ -42,8 +52,13 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
     RedirectModule,
     SnippetModule,
     AnalyticsModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}

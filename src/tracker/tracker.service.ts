@@ -5,6 +5,9 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Project } from '../../generated/prisma/client';
+import { ConfigurationService } from '../config/configuration.service';
+import { DomainEventsService } from '../domain-events/domain-events.service';
+import { MetricsService } from '../observability/metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttributionEngineService } from './attribution-engine.service';
 import {
@@ -40,7 +43,17 @@ export class TrackerService {
     private readonly visitorManager: VisitorManagerService,
     private readonly sessionManager: SessionManagerService,
     private readonly attributionEngine: AttributionEngineService,
+    private readonly metricsService: MetricsService,
+    private readonly configurationService: ConfigurationService,
+    private readonly domainEvents: DomainEventsService,
   ) {}
+
+  private resolveConfig(raw: TrackerConfig | null): ResolvedTrackerConfig {
+    return resolveTrackerConfig(
+      raw,
+      this.configurationService.rateLimit.defaultProjectLimitPerMinute,
+    );
+  }
 
   async assertDomainAllowed(project: Project, req: Request): Promise<void> {
     const originHost =
@@ -48,7 +61,7 @@ export class TrackerService {
     if (!originHost) return;
 
     const rawConfig = await this.repository.getTrackerConfig(project.id);
-    const config = resolveTrackerConfig(rawConfig);
+    const config = this.resolveConfig(rawConfig);
     const allowedDomains = [project.domain, ...config.allowedDomains].filter(
       (domain): domain is string => Boolean(domain),
     );
@@ -61,11 +74,14 @@ export class TrackerService {
   async processIngestion(
     project: Project,
     dto: IngestionInput,
+    correlationId?: string,
   ): Promise<IngestionDecision> {
+    const cid = correlationId ?? dto.visitorId;
     const rawConfig = await this.repository.getTrackerConfig(project.id);
-    const config = resolveTrackerConfig(rawConfig);
+    const config = this.resolveConfig(rawConfig);
 
     if (!isEventNameAllowed(config, dto.eventName)) {
+      this.metricsService.incrementEventsBlocked();
       return { kind: 'blocked', reason: 'event_blocked' };
     }
 
@@ -73,20 +89,52 @@ export class TrackerService {
       project.id,
       dto.visitorId,
     );
+    if (visitorState.isNewVisitor) {
+      this.metricsService.incrementVisitorsNew();
+      this.domainEvents.publish('VisitorCreated', {
+        correlationId: cid,
+        projectId: project.id,
+        visitorId: dto.visitorId,
+      });
+    } else {
+      this.metricsService.incrementVisitorsReturning();
+      this.domainEvents.publish('VisitorReturned', {
+        correlationId: cid,
+        projectId: project.id,
+        visitorId: dto.visitorId,
+      });
+    }
+
     const sessionState = await this.sessionManager.resolve(
       project.id,
       dto.visitorId,
       dto.sessionId,
       config.sessionTimeoutMinutes,
     );
-    if (sessionState.isNewSession && !visitorState.isNewVisitor) {
-      await this.visitorManager.incrementSessionCount(
-        project.id,
-        dto.visitorId,
-      );
+    if (sessionState.isNewSession) {
+      this.metricsService.incrementSessionsCreated();
+      this.domainEvents.publish('SessionStarted', {
+        correlationId: cid,
+        projectId: project.id,
+        visitorId: dto.visitorId,
+        sessionId: sessionState.sessionId,
+      });
+      if (!visitorState.isNewVisitor) {
+        await this.visitorManager.incrementSessionCount(
+          project.id,
+          dto.visitorId,
+        );
+      }
     }
 
     if (dto.eventType === 'HEARTBEAT') {
+      this.metricsService.incrementHeartbeats();
+      this.domainEvents.publish('HeartbeatReceived', {
+        correlationId: cid,
+        projectId: project.id,
+        visitorId: dto.visitorId,
+        sessionId: sessionState.sessionId,
+      });
       return {
         kind: 'heartbeat',
         sessionId: sessionState.sessionId,
@@ -116,7 +164,7 @@ export class TrackerService {
   ): Promise<ResolvedTrackerConfig> {
     await this.assertOwnership(workspaceId, projectId);
     const raw = await this.repository.getTrackerConfig(projectId);
-    return resolveTrackerConfig(raw);
+    return this.resolveConfig(raw);
   }
 
   async updateConfig(
@@ -128,7 +176,11 @@ export class TrackerService {
     const existing = await this.repository.getTrackerConfig(projectId);
     const merged: TrackerConfig = { ...existing, ...dto };
     await this.repository.updateTrackerConfig(projectId, merged);
-    return resolveTrackerConfig(merged);
+    this.domainEvents.publish('TrackerConfigured', {
+      workspaceId,
+      projectId,
+    });
+    return this.resolveConfig(merged);
   }
 
   private async assertOwnership(

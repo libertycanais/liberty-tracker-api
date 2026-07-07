@@ -17,12 +17,13 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/jwt-payload.type';
 import { CurrentProject } from '../common/decorators/current-project.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ProjectApiKeyGuard } from '../common/guards/project-api-key.guard';
+import type { RequestWithId } from '../observability/logging/request-id.middleware';
+import { ProjectRateLimitGuard } from '../tracker/guards/project-rate-limit.guard';
 import { TrackerService } from '../tracker/tracker.service';
 import type { Project } from '../../generated/prisma/client';
 import type {
@@ -51,13 +52,13 @@ export class EventsController {
     status: 201,
     description: 'Evento aceito, ignorado (blocked) ou heartbeat processado',
   })
-  @UseGuards(ProjectApiKeyGuard, ThrottlerGuard)
+  @UseGuards(ProjectApiKeyGuard, ProjectRateLimitGuard, ThrottlerGuard)
   @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Post('events')
   async create(
     @CurrentProject() project: Project,
     @Body() dto: CreateEventDto,
-    @Req() req: Request,
+    @Req() req: RequestWithId,
   ) {
     await this.trackerService.assertDomainAllowed(project, req);
 
@@ -67,6 +68,7 @@ export class EventsController {
     return this.eventsService.createEvent(project, dto, {
       ip,
       userAgent: req.headers['user-agent'],
+      correlationId: req.correlationId,
     });
   }
 

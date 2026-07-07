@@ -3,6 +3,8 @@ import { Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import { ForwardStatus, Platform } from '../../../generated/prisma/enums';
 import { EncryptionService } from '../../crypto/encryption.service';
+import { DomainEventsService } from '../../domain-events/domain-events.service';
+import { MetricsService } from '../../observability/metrics/metrics.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   Ga4MpService,
@@ -29,12 +31,18 @@ export class EventForwardingProcessor extends WorkerHost {
     private readonly metaCapiService: MetaCapiService,
     private readonly ga4MpService: Ga4MpService,
     private readonly googleAdsService: GoogleAdsService,
+    private readonly metricsService: MetricsService,
+    private readonly domainEvents: DomainEventsService,
   ) {
     super();
   }
 
   async process(job: Job<ForwardJobData>): Promise<void> {
-    const { eventId, platform } = job.data;
+    const { eventId, platform, correlationId } = job.data;
+    if (job.timestamp) {
+      this.metricsService.recordQueueWaitTime(Date.now() - job.timestamp);
+    }
+    const processingStartedAt = Date.now();
 
     const event = await this.prisma.event.findUniqueOrThrow({
       where: { id: eventId },
@@ -51,6 +59,7 @@ export class EventForwardingProcessor extends WorkerHost {
           errorMessage: 'No active credential configured',
         },
       });
+      this.metricsService.incrementEventsSkippedForwarding();
       return;
     }
 
@@ -67,8 +76,16 @@ export class EventForwardingProcessor extends WorkerHost {
             'Evento sem gclid; não é possível reportar conversão de clique',
         },
       });
+      this.metricsService.incrementEventsSkippedForwarding();
       return;
     }
+
+    this.domainEvents.publish('ForwardStarted', {
+      correlationId: correlationId ?? eventId,
+      projectId: event.projectId,
+      eventId,
+      platform,
+    });
 
     let result: ForwarderResult;
     if (platform === Platform.META) {
@@ -88,6 +105,10 @@ export class EventForwardingProcessor extends WorkerHost {
       );
     }
 
+    this.metricsService.recordQueueProcessingTime(
+      Date.now() - processingStartedAt,
+    );
+
     await this.prisma.eventForward.update({
       where: { eventId_platform: { eventId, platform } },
       data: {
@@ -101,10 +122,26 @@ export class EventForwardingProcessor extends WorkerHost {
     });
 
     if (!result.success) {
+      this.metricsService.incrementQueueJobsFailed();
+      this.domainEvents.publish('ForwardFailed', {
+        correlationId: correlationId ?? eventId,
+        projectId: event.projectId,
+        eventId,
+        platform,
+        errorMessage: result.errorMessage,
+      });
       this.logger.warn(
         `Forward failed for event ${eventId} -> ${platform}: ${result.errorMessage}`,
       );
       throw new Error(result.errorMessage ?? `Forward to ${platform} failed`);
     }
+
+    this.metricsService.incrementQueueJobsCompleted();
+    this.domainEvents.publish('ForwardSucceeded', {
+      correlationId: correlationId ?? eventId,
+      projectId: event.projectId,
+      eventId,
+      platform,
+    });
   }
 }

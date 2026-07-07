@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -8,6 +9,7 @@ import {
   Query,
   Req,
   UseGuards,
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -34,6 +36,17 @@ import type {
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventsService } from './events.service';
 
+const MAX_BATCH_SIZE = 50;
+
+/**
+ * Same options as the global pipe in main.ts — reused programmatically so
+ * single-event AND batch items get byte-identical validation semantics.
+ */
+const eventValidationPipe = new ValidationPipe({
+  whitelist: true,
+  transform: true,
+});
+
 @ApiTags('events')
 @Controller()
 export class EventsController {
@@ -46,18 +59,19 @@ export class EventsController {
   @ApiOperation({
     summary: 'Ingestão de eventos (endpoint único do pipeline de tracking)',
     description:
-      'Passa por Domain Validation, allow/block list, Visitor/Session Manager e Attribution Engine antes de gravar o Event e enfileirar o forwarding. Eventos HEARTBEAT só renovam a sessão e nunca geram uma linha em Event.',
+      'Aceita um evento único (CreateEventDto — payload legado, inalterado) OU um lote { events: CreateEventDto[] }. Passa por Domain Validation, allow/block list, Visitor/Session Manager e Attribution Engine antes de gravar o Event e enfileirar o forwarding. Eventos HEARTBEAT só renovam a sessão e nunca geram uma linha em Event.',
   })
   @ApiResponse({
     status: 201,
-    description: 'Evento aceito, ignorado (blocked) ou heartbeat processado',
+    description:
+      'Evento aceito/ignorado/heartbeat — ou { count, results } para lote',
   })
   @UseGuards(ProjectApiKeyGuard, ProjectRateLimitGuard, ThrottlerGuard)
   @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Post('events')
   async create(
     @CurrentProject() project: Project,
-    @Body() dto: CreateEventDto,
+    @Body() body: Record<string, unknown>,
     @Req() req: RequestWithId,
   ) {
     await this.trackerService.assertDomainAllowed(project, req);
@@ -65,11 +79,42 @@ export class EventsController {
     const ip =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
       req.ip;
-    return this.eventsService.createEvent(project, dto, {
+    const meta = {
       ip,
       userAgent: req.headers['user-agent'],
       correlationId: req.correlationId,
-    });
+      requestId: req.requestId,
+      headers: req.headers as Record<string, string | string[] | undefined>,
+    };
+
+    // Batch: { events: [...] } — additive; the legacy single-event shape
+    // takes the same validation and pipeline it always did.
+    if (Array.isArray((body as { events?: unknown }).events)) {
+      const rawEvents = (body as { events: unknown[] }).events;
+      if (rawEvents.length === 0) {
+        throw new BadRequestException('events must not be empty');
+      }
+      if (rawEvents.length > MAX_BATCH_SIZE) {
+        throw new BadRequestException(
+          `events must contain at most ${MAX_BATCH_SIZE} items`,
+        );
+      }
+      const dtos = (await Promise.all(
+        rawEvents.map((raw) =>
+          eventValidationPipe.transform(raw, {
+            type: 'body',
+            metatype: CreateEventDto,
+          }),
+        ),
+      )) as CreateEventDto[];
+      return this.eventsService.createEvents(project, dtos, meta);
+    }
+
+    const dto = (await eventValidationPipe.transform(body, {
+      type: 'body',
+      metatype: CreateEventDto,
+    })) as CreateEventDto;
+    return this.eventsService.createEvent(project, dto, meta);
   }
 
   @ApiBearerAuth()

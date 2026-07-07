@@ -21,6 +21,7 @@ describe('MetricsService', () => {
       queueJobsCompleted: 0,
       queueJobsFailed: 0,
       queueEnqueueFailures: 0,
+      conversions: 0,
     });
     expect(snapshot.averages).toEqual({
       responseTimeMs: 0,

@@ -4,6 +4,7 @@ import {
   DEFAULT_SESSION_TIMEOUT_MINUTES,
 } from '../tracker.constants';
 import type { ResolvedTrackerConfig, TrackerConfig } from '../tracker.types';
+import { DEFAULT_ATTRIBUTION_CONFIG } from '../../attribution/attribution.types';
 
 export function resolveTrackerConfig(
   raw: TrackerConfig | null | undefined,
@@ -18,6 +19,15 @@ export function resolveTrackerConfig(
     blockedEvents: raw?.blockedEvents ?? [],
     allowedDomains: raw?.allowedDomains ?? [],
     rateLimitPerMinute: raw?.rateLimitPerMinute ?? defaultRateLimitPerMinute,
+    attributionModel: raw?.attributionModel ?? DEFAULT_ATTRIBUTION_CONFIG.model,
+    attributionWindowDays:
+      raw?.attributionWindowDays ?? DEFAULT_ATTRIBUTION_CONFIG.windowDays,
+    timeDecayHalfLifeDays:
+      raw?.timeDecayHalfLifeDays ??
+      DEFAULT_ATTRIBUTION_CONFIG.timeDecayHalfLifeDays,
+    positionWeights:
+      raw?.positionWeights ?? DEFAULT_ATTRIBUTION_CONFIG.positionWeights,
+    experimental: raw?.experimental ?? {},
   };
 }
 

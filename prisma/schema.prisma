@@ -80,6 +80,7 @@ model Project {
 
   credentials PlatformCredential[]
   events      Event[]
+  visitors    Visitor[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId])
@@ -137,6 +138,66 @@ model Event {
   @@unique([projectId, eventId])
   @@index([projectId, occurredAt])
   @@index([projectId, visitorId])
+}
+
+/// Durable per-visitor aggregate (source of truth for attribution).
+/// Complements the ephemeral Redis VisitorManager; never replaces it.
+model Visitor {
+  id               String    @id @default(cuid())
+  projectId        String
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  visitorId        String
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  sessionCount     Int       @default(0)
+  eventCount       Int       @default(0)
+  clickIds         Json?
+  firstTouch       Json?
+  lastTouch        Json?
+  context          Json?
+  geo              Json?
+  fingerprintHash  String?
+  fingerprintVersion Int?
+  convertedAt      DateTime?
+  conversionCount  Int       @default(0)
+  conversionValue  Decimal?  @db.Decimal(14, 2)
+  attribution      Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  touchpoints Touchpoint[]
+
+  @@unique([projectId, visitorId])
+  @@index([projectId, lastSeenAt])
+}
+
+/// Append-only attribution timeline (channel touches + conversions).
+/// Rows are NEVER updated — always inserted — so models can be recalculated
+/// and journeys audited/replayed.
+model Touchpoint {
+  id           String    @id @default(cuid())
+  projectId    String
+  visitorId    String
+  visitor      Visitor   @relation(fields: [projectId, visitorId], references: [projectId, visitorId], onDelete: Cascade)
+  sessionId    String?
+  occurredAt   DateTime
+  position     Int
+  source       String?
+  medium       String?
+  campaign     String?
+  content      String?
+  term         String?
+  channel      String?
+  referrer     String?
+  landingPage  String?
+  clickIds     Json?
+  eventType    EventType
+  eventName    String
+  isConversion Boolean   @default(false)
+  value        Decimal?  @db.Decimal(14, 2)
+  createdAt    DateTime  @default(now())
+
+  @@index([projectId, visitorId, occurredAt])
 }
 
 model EventForward {

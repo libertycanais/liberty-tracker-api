@@ -11,6 +11,15 @@ export interface TrackerConfig {
   blockedEvents?: string[];
   allowedDomains?: string[];
   rateLimitPerMinute?: number;
+  /** Attribution (Sprint 4.1) — all optional, defaults resolved at runtime. */
+  attributionModel?: string;
+  attributionWindowDays?: number;
+  timeDecayHalfLifeDays?: number;
+  positionWeights?: [number, number];
+  /** SDK feature flags embedded in the generated tracker.js. */
+  sdkFlags?: Record<string, boolean>;
+  /** Escape hatch for testing features without schema changes. */
+  experimental?: Record<string, unknown>;
 }
 
 export interface ResolvedTrackerConfig {
@@ -20,6 +29,11 @@ export interface ResolvedTrackerConfig {
   blockedEvents: string[];
   allowedDomains: string[];
   rateLimitPerMinute: number;
+  attributionModel: string;
+  attributionWindowDays: number;
+  timeDecayHalfLifeDays: number;
+  positionWeights: [number, number];
+  experimental: Record<string, unknown>;
 }
 
 export interface VisitorState {

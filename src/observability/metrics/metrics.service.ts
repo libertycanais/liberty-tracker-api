@@ -29,6 +29,7 @@ export class MetricsService {
     queueJobsCompleted: 0,
     queueJobsFailed: 0,
     queueEnqueueFailures: 0,
+    conversions: 0,
   };
 
   private readonly responseTime = newAverage();
@@ -80,6 +81,10 @@ export class MetricsService {
     this.counters.queueEnqueueFailures++;
   }
 
+  incrementConversions(): void {
+    this.counters.conversions++;
+  }
+
   recordResponseTime(ms: number): void {
     this.responseTime.count++;
     this.responseTime.totalMs += ms;
@@ -117,6 +122,27 @@ export class MetricsService {
       rates: {
         requestsPerMinute: perMinute(this.counters.requestsTotal),
         eventsPerMinute: perMinute(this.counters.eventsIngested),
+        visitorsPerMinute: perMinute(
+          this.counters.visitorsNew + this.counters.visitorsReturning,
+        ),
+        sessionsPerMinute: perMinute(this.counters.sessionsCreated),
+        conversionsPerMinute: perMinute(this.counters.conversions),
+        conversionRate:
+          this.counters.eventsIngested > 0
+            ? Math.round(
+                (this.counters.conversions / this.counters.eventsIngested) *
+                  10000,
+              ) / 10000
+            : 0,
+        retryRate:
+          this.counters.queueJobsCompleted + this.counters.queueJobsFailed > 0
+            ? Math.round(
+                (this.counters.queueJobsFailed /
+                  (this.counters.queueJobsCompleted +
+                    this.counters.queueJobsFailed)) *
+                  10000,
+              ) / 10000
+            : 0,
       },
       averages: {
         responseTimeMs: average(this.responseTime),

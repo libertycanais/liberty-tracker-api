@@ -1,13 +1,25 @@
 import { Prisma } from '../../generated/prisma/client';
 import type { Project } from '../../generated/prisma/client';
+import { AttributionService } from '../attribution/attribution.service';
 import { EncryptionService } from '../crypto/encryption.service';
 import { DomainEventsService } from '../domain-events/domain-events.service';
 import { ForwardingService } from '../forwarding/forwarding.service';
+import { GeolocationService } from '../geolocation/geolocation.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackerService } from '../tracker/tracker.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventsService } from './events.service';
+import { EventPipelineService } from './pipeline/event-pipeline.service';
+import {
+  EmitDomainEventsStage,
+  EnrichStage,
+  ForwardStage,
+  MetricsStage,
+  NormalizeStage,
+  PersistStage,
+  ValidateStage,
+} from './pipeline/stages';
 
 function makeProject(): Project {
   return {
@@ -35,12 +47,14 @@ function makeDto(overrides: Partial<CreateEventDto> = {}): CreateEventDto {
   });
 }
 
-describe('EventsService#createEvent', () => {
+describe('EventsService#createEvent (via Event Pipeline)', () => {
   let prisma: jest.Mocked<PrismaService>;
   let encryptionService: jest.Mocked<EncryptionService>;
   let forwardingService: jest.Mocked<ForwardingService>;
   let trackerService: jest.Mocked<TrackerService>;
   let metricsService: jest.Mocked<MetricsService>;
+  let attributionService: jest.Mocked<AttributionService>;
+  let domainEvents: jest.Mocked<DomainEventsService>;
   let service: EventsService;
 
   beforeEach(() => {
@@ -61,17 +75,30 @@ describe('EventsService#createEvent', () => {
       incrementEventsIngested: jest.fn(),
       recordProcessingTime: jest.fn(),
     } as unknown as jest.Mocked<MetricsService>;
-    const domainEvents = {
+    attributionService = {
+      resolve: jest.fn(),
+    } as unknown as jest.Mocked<AttributionService>;
+    domainEvents = {
       publish: jest.fn(),
     } as unknown as jest.Mocked<DomainEventsService>;
+    const geolocationService = {
+      resolve: jest.fn().mockResolvedValue(null),
+    } as unknown as jest.Mocked<GeolocationService>;
 
+    const pipeline = new EventPipelineService(
+      new ValidateStage(),
+      new NormalizeStage(),
+      new EnrichStage(trackerService, geolocationService),
+      new PersistStage(prisma, encryptionService, attributionService),
+      new EmitDomainEventsStage(domainEvents),
+      new ForwardStage(forwardingService, domainEvents),
+      new MetricsStage(metricsService),
+    );
     service = new EventsService(
       prisma,
       encryptionService,
-      forwardingService,
-      trackerService,
+      pipeline,
       metricsService,
-      domainEvents,
     );
   });
 
@@ -111,7 +138,7 @@ describe('EventsService#createEvent', () => {
     expect(forwardingService.enqueueForwards).not.toHaveBeenCalled();
   });
 
-  it('persists the enriched event and enqueues forwarding for a normal event', async () => {
+  it('persists the enriched event, runs attribution and enqueues forwarding for a normal event', async () => {
     trackerService.processIngestion.mockResolvedValue({
       kind: 'event',
       sessionId: 'session-1',
@@ -145,6 +172,12 @@ describe('EventsService#createEvent', () => {
           ip: '1.2.3.4',
           userAgent: 'jest',
         }),
+      }),
+    );
+    expect(attributionService.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'project-1',
+        visitorId: 'visitor-1',
       }),
     );
     expect(forwardingService.enqueueForwards).toHaveBeenCalledWith(
@@ -189,7 +222,7 @@ describe('EventsService#createEvent', () => {
     expect(encryptionService.encrypt).toHaveBeenCalledWith('+5511999999999');
   });
 
-  it('returns the same idempotent response without double-enqueueing when it loses a P2002 race', async () => {
+  it('returns the same idempotent response without double-enqueueing or re-attributing on a P2002 race', async () => {
     trackerService.processIngestion.mockResolvedValue({
       kind: 'event',
       sessionId: 'session-1',
@@ -228,6 +261,7 @@ describe('EventsService#createEvent', () => {
       isNewSession: true,
     });
     expect(forwardingService.enqueueForwards).not.toHaveBeenCalled();
+    expect(attributionService.resolve).not.toHaveBeenCalled();
   });
 
   it('rejects an occurredAt that is absurdly far in the future', async () => {
@@ -251,5 +285,35 @@ describe('EventsService#createEvent', () => {
       ),
     ).rejects.toThrow();
     expect(prisma.event.upsert).not.toHaveBeenCalled();
+  });
+
+  it('processes a batch through the same pipeline, one response per event', async () => {
+    trackerService.processIngestion.mockResolvedValue({
+      kind: 'event',
+      sessionId: 'session-1',
+      isNewVisitor: false,
+      isNewSession: false,
+      sessionStartedAt: new Date(),
+      attribution: {},
+    });
+    (prisma.event.upsert as jest.Mock).mockImplementation(
+      (args: { create: { eventId: string } }) =>
+        Promise.resolve({
+          id: 'row-' + args.create.eventId,
+          eventId: args.create.eventId,
+          visitorId: 'visitor-1',
+          sessionId: 'session-1',
+        }),
+    );
+
+    const result = await service.createEvents(
+      makeProject(),
+      [makeDto({ eventId: 'b1' }), makeDto({ eventId: 'b2' })],
+      {},
+    );
+
+    expect(result.count).toBe(2);
+    expect(result.results).toHaveLength(2);
+    expect(forwardingService.enqueueForwards).toHaveBeenCalledTimes(2);
   });
 });
